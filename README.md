@@ -20,16 +20,15 @@ Automatically clean raw financial files (CSV, Excel) and prepare them for analys
 - Claude (AI)
 
 ## 📸 Screenshots
-*(## 📸 Screenshots
+## 📸 Screenshots
 
 ### Main Interface
-(DataPrep Pro Interface 1.png)
+![DataPrep Pro Interface 1](DataPrep%20Pro%20Interface%201.png)
+*Main dashboard of DataPrep Pro*
 
-### File Preview
-(DataPrep Pro Interface 2.png)
-
-### Merge Settings
-![Merge Settings](screenshot3.png)
+### File Preview / Merge View
+![DataPrep Pro Interface 2](DataPrep%20Pro%20Interface%202.png)
+*File preview and merge settings*
 
 ## 🚀 Installation
 ```bash
