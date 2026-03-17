@@ -14,8 +14,8 @@ Automatically clean raw financial files (CSV, Excel) and prepare them for analys
 - Full navigation between steps
 
 ## 🛠️ Tech Stack
-- Python(https://img.shields.io/badge/Python-3.9-blue?style=flat&logo=python&logoColor=white)
-- Streamlit(https://img.shields.io/badge/Streamlit-1.28-FF4B4B?style=flat&logo=streamlit&logoColor=white)
+- Python (https://img.shields.io/badge/Python-3.9-blue?style=flat&logo=python&logoColor=white)
+- Streamlit (https://img.shields.io/badge/Streamlit-1.28-FF4B4B?style=flat&logo=streamlit&logoColor=white)
 - Pandas
 - Claude (AI)
 - [License](https://img.shields.io/badge/License-MIT-green)
