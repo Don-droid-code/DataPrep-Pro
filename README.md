@@ -23,10 +23,10 @@ Automatically clean raw financial files (CSV, Excel) and prepare them for analys
 *(## 📸 Screenshots
 
 ### Main Interface
-![Main Interface](screenshot1.png)
+![Main Interface](DataPrep Pro Interface 1.png)
 
 ### File Preview
-![File Preview](screenshot2.png)
+![File Preview](DataPrep Pro Interface 2.png)
 
 ### Merge Settings
 ![Merge Settings](screenshot3.png)
