@@ -20,7 +20,16 @@ Automatically clean raw financial files (CSV, Excel) and prepare them for analys
 - Claude (AI)
 
 ## 📸 Screenshots
-*(You can add screenshots here later)*
+*(## 📸 Screenshots
+
+### Main Interface
+![Main Interface](screenshot1.png)
+
+### File Preview
+![File Preview](screenshot2.png)
+
+### Merge Settings
+![Merge Settings](screenshot3.png)
 
 ## 🚀 Installation
 ```bash
