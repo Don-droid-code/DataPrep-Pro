@@ -122,6 +122,13 @@ ALL_STEPS = [
     (11, "STANDARDISE"),
     (12, "REPORT"),
 ]
+# Expert-mode steps live in a separate flat list (not mixed with quick-clean steps)
+EXPERT_STEPS = [
+    (20, "E·UPLOAD"),
+    (21, "E·MERGE"),
+    (22, "E·EXPORT"),
+]
+EXPERT_STEP_ORDER = {sn: i for i, (sn, _) in enumerate(EXPERT_STEPS)}
 STEP_ORDER = {sn: i for i, (sn, _) in enumerate(ALL_STEPS)}
 MULTI_STEPS = {3, 2, 4}
 
@@ -168,6 +175,8 @@ def _next_step(active):
 
 def pipeline_bar(active):
     """Compact two-row nav: step counter + dropdown jump on top, dot-trail below."""
+    if active in (20, 21, 22):
+        _expert_pipeline_bar(active); return
     steps      = _visible_steps(active)
     highest_ov = STEP_ORDER.get(_highest_reached(), 0)
     _mark_reached(active)
@@ -300,6 +309,35 @@ def apply_and_store(new_df, entry):
 
 def render_import():
     step_header("1", "IMPORT DATA", "Upload files or paste a Google Sheets URL")
+
+    # ── Mode selector (top of the page) ──────────────────────────────────────
+    st.markdown(
+        '<div style="background:linear-gradient(135deg,#0a1f2e,#081828);border:1px solid #1a3347;'
+        'border-radius:8px;padding:16px 20px;margin-bottom:18px">',
+        unsafe_allow_html=True)
+    mc1, mc2 = st.columns(2)
+    with mc1:
+        st.markdown(
+            '<div style="font-family:IBM Plex Mono;font-size:11px;font-weight:700;'
+            'color:#00c8a8;letter-spacing:.12em;margin-bottom:4px">⚡ QUICK CLEAN</div>'
+            '<div style="font-size:11px;color:#4a7088">Merge first, then clean globally.<br>'
+            'Good for fast jobs and beginners.</div>',
+            unsafe_allow_html=True)
+    with mc2:
+        st.markdown(
+            '<div style="font-family:IBM Plex Mono;font-size:11px;font-weight:700;'
+            'color:#4db8ff;letter-spacing:.12em;margin-bottom:4px">🔬 EXPERT MODE</div>'
+            '<div style="font-size:11px;color:#4a7088">Clean each file individually,<br>'
+            'then control the merge precisely.</div>',
+            unsafe_allow_html=True)
+    app_mode = st.radio("app_mode", ["⚡ Quick Clean", "🔬 Expert Mode"],
+                         horizontal=True, label_visibility="collapsed",
+                         key="app_mode_picker")
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    if app_mode == "🔬 Expert Mode":
+        _render_expert_entry()
+        return
 
     mode = st.radio("source",
                     ["📁 Single File", "📂 Multiple Files", "🌐 Google Sheets"],
@@ -1104,15 +1142,131 @@ def render_profile():
             set_state("_profile_cache", None)
             st.rerun()
 
-    # Suggestions
+    # ── Actionable Suggestions ───────────────────────────────────────────────
     if sugs:
         st.markdown("---")
-        st.markdown('<div style="font-family:IBM Plex Mono;font-size:10px;color:#2a4a5e;letter-spacing:.12em;margin-bottom:8px">SMART SUGGESTIONS</div>', unsafe_allow_html=True)
-        for sug in sugs[:6]:
-            pri = sug.get("priority", "low")
-            icon = sug.get("icon", "💡")
-            kind = "warn" if pri == "high" else "info"
-            info_box(f"{icon} <strong>{sug['column']}</strong>: {sug.get('action','')} — {sug.get('detail','')}", kind)
+        st.markdown(
+            '<div style="font-family:IBM Plex Mono;font-size:10px;color:#2a4a5e;'
+            'letter-spacing:.12em;margin-bottom:10px">💡 SMART SUGGESTIONS</div>',
+            unsafe_allow_html=True)
+
+        dismissed = get_state("_dismissed_sugs") or set()
+        df_live = (lambda a,b: a if a is not None else b)(get_state("clean_df"), get_state("raw_df"))
+
+        for si, sug in enumerate(sugs[:8]):
+            sug_id = f"{sug['column']}_{sug.get('code',si)}"
+            if sug_id in dismissed:
+                continue
+            pri   = sug.get("priority", "low")
+            icon  = sug.get("icon", "💡")
+            col   = sug['column']
+            act   = sug.get("action", "")
+            det   = sug.get("detail", "")
+            code  = sug.get("code", "")
+            kind  = "warn" if pri == "high" else "info"
+            border = "#f0a020" if pri == "high" else "#4db8ff"
+
+            st.markdown(
+                f'<div style="background:#0a1820;border:1px solid {border};border-radius:5px;'
+                f'padding:10px 14px;margin-bottom:8px">',
+                unsafe_allow_html=True)
+
+            sc1, sc2 = st.columns([8, 2])
+            with sc1:
+                st.markdown(
+                    f'<div style="font-size:12px">{icon} <strong style="color:#e8f4fb">{col}</strong>'
+                    f' <span style="color:#4a7088">·</span> {act}'
+                    f'<br><span style="font-size:11px;color:#4a7088">{det}</span></div>',
+                    unsafe_allow_html=True)
+            with sc2:
+                b1, b2, b3 = st.columns(3)
+
+                # Review button — shows a preview expander
+                with b1:
+                    if st.button("👁", key=f"sug_review_{si}", help="Review what will change"):
+                        cur = get_state("_sug_review") or set()
+                        if sug_id in cur: cur.discard(sug_id)
+                        else: cur.add(sug_id)
+                        set_state("_sug_review", cur); st.rerun()
+
+                # Apply button
+                with b2:
+                    if st.button("✅", key=f"sug_apply_{si}", help="Apply this fix automatically"):
+                        if df_live is not None:
+                            try:
+                                new_df = df_live.copy()
+                                entry  = None
+                                if code == "high_missing":
+                                    new_df, entry = drop_high_missing_cols(df_live, 70.0)
+                                elif code == "fill_numeric":
+                                    num_c = [col] if col in df_live.columns else []
+                                    if num_c:
+                                        new_df, entry = fill_missing(df_live, "median", num_c)
+                                elif code == "convert_numeric":
+                                    new_df, entry = coerce_column_type(df_live, col, "numeric")
+                                elif code == "drop_empty":
+                                    new_df, entry = drop_empty_columns(df_live)
+                                elif code == "standardise_names":
+                                    new_df, entry = standardise_column_names(df_live)
+                                elif code == "outliers":
+                                    new_df, entry = handle_outliers(df_live, [col], "flag")
+                                if entry:
+                                    apply_and_store(new_df, entry)
+                                    d2 = dismissed | {sug_id}
+                                    set_state("_dismissed_sugs", d2)
+                                    info_box(f"✅ Applied: {entry['detail'][:80]}", "success")
+                                    st.rerun()
+                            except Exception as ex:
+                                st.error(f"Could not apply: {ex}")
+
+                # Ignore button
+                with b3:
+                    if st.button("✕", key=f"sug_ignore_{si}", help="Dismiss this suggestion"):
+                        d2 = dismissed | {sug_id}
+                        set_state("_dismissed_sugs", d2); st.rerun()
+
+            st.markdown("</div>", unsafe_allow_html=True)
+
+            # Review panel — inline diff preview
+            reviewing = sug_id in (get_state("_sug_review") or set())
+            if reviewing and df_live is not None:
+                with st.expander(f"👁 Preview: what will change for «{col}»", expanded=True):
+                    try:
+                        prev_new = df_live.copy()
+                        if code == "high_missing":
+                            prev_new, _ = drop_high_missing_cols(df_live, 70.0)
+                            st.markdown(f"**Columns remaining:** {len(prev_new.columns)} (was {len(df_live.columns)})")
+                            dropped = [c for c in df_live.columns if c not in prev_new.columns]
+                            st.caption(f"Would drop: {dropped[:10]}")
+                        elif code in ("fill_numeric", "convert_numeric"):
+                            before_miss = int(df_live[col].isna().sum())
+                            if code == "fill_numeric":
+                                prev_new, _ = fill_missing(df_live, "median", [col])
+                            else:
+                                prev_new, _ = coerce_column_type(df_live, col, "numeric")
+                            after_miss = int(prev_new[col].isna().sum())
+                            ra, rb2, rc = st.columns(3)
+                            with ra: metric_tile("BEFORE (NaN)", str(before_miss), "#ff6060")
+                            with rb2: metric_tile("AFTER (NaN)", str(after_miss), "#00c8a8")
+                            with rc: metric_tile("FILLED", str(before_miss - after_miss), "#4db8ff")
+                            st.dataframe(prev_new[[col]].head(8), use_container_width=True, height=180)
+                        elif code == "outliers":
+                            out = detect_outliers(df_live, method="iqr")
+                            info = out.get(col, {})
+                            st.markdown(f"**Outliers:** {info.get('n_outliers',0)} rows  "
+                                        f"**Bounds:** {info.get('lower_bound',''):.2f} → {info.get('upper_bound',''):.2f}")
+                            st.caption(f"Sample: {info.get('outlier_values','')[:5]}")
+                        elif code == "standardise_names":
+                            prev_new, _ = standardise_column_names(df_live)
+                            changed = [(o, n) for o, n in zip(df_live.columns, prev_new.columns) if o != n]
+                            if changed:
+                                st.dataframe(
+                                    pd.DataFrame(changed, columns=["Before","After"]),
+                                    use_container_width=True, height=160)
+                            else:
+                                st.caption("No column names would change.")
+                    except Exception as ex:
+                        st.caption(f"Preview unavailable: {ex}")
 
     # Column table
     st.markdown("---")
@@ -1800,6 +1954,33 @@ def render_sidebar():
             st.markdown('<div style="font-size:12px;color:#2a4a5e;padding:8px 0">No data loaded</div>', unsafe_allow_html=True)
 
         st.markdown('<div style="border-top:1px solid #1a2e3d;margin:16px 0"></div>', unsafe_allow_html=True)
+
+        # ── Expert glossary (shown when in Expert mode step 20) ───────────────
+        step_now = get_state("step") or 1
+        if step_now == 20:
+            st.markdown(
+                '<div style="font-family:IBM Plex Mono;font-size:10px;color:#4db8ff;'
+                'letter-spacing:.12em;margin-bottom:8px">🔬 GLOSSARY</div>',
+                unsafe_allow_html=True)
+            glossary = [
+                ("IQR",     "#f0a020", "Interquartile Range. Flags values below Q1−1.5×IQR or above Q3+1.5×IQR. Robust to extremes."),
+                ("Z-Score", "#f0a020", "Flags values more than N std-devs from the mean. Sensitive to very large outliers."),
+                ("Flag",    "#4db8ff", "Adds a boolean column marking each outlier row. Original values are unchanged."),
+                ("Cap",     "#4db8ff", "Replaces outlier values with the boundary value. No rows are removed."),
+                ("Drop",    "#ff6060", "Removes rows containing outlier values. Use carefully."),
+                ("Mean",    "#00c8a8", "Replace missing with the arithmetic average. Sensitive to outliers."),
+                ("Median",  "#00c8a8", "Replace missing with the middle value. More robust than mean."),
+                ("Mode",    "#00c8a8", "Replace with the most frequent value. Works for numeric or categorical."),
+                ("Zero",    "#00c8a8", "Replace missing with 0. Only use when 0 is meaningful (e.g. no sales = 0)."),
+            ]
+            for term, color, desc in glossary:
+                st.markdown(
+                    f'<div style="margin-bottom:7px">'
+                    f'<span style="font-family:IBM Plex Mono;font-size:10px;font-weight:700;color:{color}">{term}</span>'
+                    f'<div style="font-size:10px;color:#4a7088;line-height:1.4;margin-top:1px">{desc}</div></div>',
+                    unsafe_allow_html=True)
+            st.markdown('<div style="border-top:1px solid #1a2e3d;margin:12px 0 10px"></div>', unsafe_allow_html=True)
+
         if st.button("⟳ Reset", width="stretch"):
             reset_pipeline(); st.rerun()
         st.markdown(
@@ -1808,6 +1989,832 @@ def render_sidebar():
             'Output: clean CSV for any tool</div>',
             unsafe_allow_html=True)
 
+
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# EXPERT MODE — _expert_pipeline_bar
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _expert_pipeline_bar(active):
+    steps = EXPERT_STEPS
+    labels = {sn: lbl for sn, lbl in steps}
+    order  = EXPERT_STEP_ORDER
+    nums   = [sn for sn, _ in steps]
+    idx    = nums.index(active) + 1 if active in nums else 1
+    total  = len(nums)
+    lbl    = labels.get(active, "")
+
+    r1, r2 = st.columns([6, 4])
+    with r1:
+        st.markdown(
+            f'<div style="display:flex;align-items:center;gap:10px;padding-top:2px">'
+            f'<div style="font-family:IBM Plex Mono;font-size:11px;color:#4db8ff">'
+            f'🔬 EXPERT · STEP <span style="color:#4db8ff;font-weight:700">{idx}</span>/{total}</div>'
+            f'<div style="font-family:IBM Plex Mono;font-size:13px;font-weight:700;color:#e8f4fb">◆ {lbl}</div>'
+            f'</div>',
+            unsafe_allow_html=True)
+
+    # Dot trail
+    dots = []
+    high = get_state("_expert_highest") or 20
+    for sn, slbl in steps:
+        if sn == active:
+            dots.append(f'<span title="{slbl}" style="color:#4db8ff;font-size:16px">◆</span>')
+        elif EXPERT_STEP_ORDER.get(sn, 99) < EXPERT_STEP_ORDER.get(active, 0) or sn <= high:
+            dots.append(f'<span title="{slbl}" style="color:#1a3a5a;font-size:12px">●</span>')
+        else:
+            dots.append(f'<span title="{slbl}" style="color:#1a2e3d;font-size:12px">○</span>')
+    st.markdown(
+        f'<div style="display:flex;gap:8px;padding:4px 0 10px">'
+        + " ".join(dots) + '</div>',
+        unsafe_allow_html=True)
+
+    # Back to Quick Clean
+    if st.button("← Back to mode selection", key="expert_to_home"):
+        set_state("step", 1); st.rerun()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# EXPERT MODE — entry helper (rendered inside render_import)
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _render_expert_entry():
+    """File uploader shown on step 1 when Expert mode is selected."""
+    st.markdown(
+        '<div style="font-family:IBM Plex Mono;font-size:10px;color:#4db8ff;'
+        'letter-spacing:.12em;margin-bottom:10px">🔬 EXPERT MODE — STEP 1: UPLOAD FILES</div>',
+        unsafe_allow_html=True)
+    info_box("Upload 2 or more files. You will clean each one individually before deciding how to merge them.", "info")
+
+    ups = st.file_uploader("Files", type=["csv","xlsx","xls"],
+                            accept_multiple_files=True, label_visibility="collapsed",
+                            key="expert_uploader")
+    if ups and len(ups) >= 1:
+        entries = []
+        all_ok  = True
+        with st.spinner(f"Loading {len(ups)} file(s)…"):
+            for u in ups:
+                u.seek(0); size = len(u.read()); u.seek(0)
+                df, err, _, renames = load_file(u)
+                if err:
+                    st.error(f"{u.name}: {err}"); all_ok = False; break
+                df_c, post_ren = deduplicate_columns(basic_clean(df))
+                # Each file gets its own clean_df and log
+                entries.append({
+                    "name":    u.name,
+                    "size":    size,
+                    "rows":    len(df_c),
+                    "cols":    len(df_c.columns),
+                    "df":      df_c,          # current (cleaned) state
+                    "raw_df":  df_c.copy(),   # original — never mutated
+                    "renames": renames + post_ren,
+                    "log":     [],
+                    "selected": True,
+                })
+        if all_ok and entries:
+            set_state("_expert_entries", entries)
+            set_state("_expert_highest", 20)
+            info_box(f"✓ Loaded <strong>{len(entries)} file(s)</strong>. Click below to start individual cleaning.", "success")
+            if st.button("→ Start Expert Cleaning", type="primary"):
+                set_state("step", 20); st.rerun()
+    elif ups and len(ups) == 0:
+        pass
+    elif not ups:
+        info_box("Upload at least one file to continue in Expert mode.", "warn")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# EXPERT MODE — Step 20: Per-file cleaning  (redesigned)
+# ══════════════════════════════════════════════════════════════════════════════
+
+# ── Glossary tooltips ─────────────────────────────────────────────────────────
+_TIPS = {
+    "iqr":    "IQR (Interquartile Range): flags values below Q1-1.5xIQR or above Q3+1.5xIQR. Robust to extreme values.",
+    "zscore": "Z-Score: flags values more than N standard deviations from the mean. Sensitive to extreme outliers.",
+    "flag":   "Flag: adds a new boolean column marking each outlier row. Original values are kept unchanged.",
+    "cap":    "Cap (Winsorize): replaces outlier values with the nearest boundary value. No rows are removed.",
+    "drop":   "Drop: removes entire rows that contain an outlier. Use carefully -- may lose valid data.",
+    "mean":   "Mean: replace each missing value with the arithmetic average of non-missing values in that column.",
+    "median": "Median: replace with the middle value. More robust than mean when the column has outliers.",
+    "mode":   "Mode: replace with the most frequent value. Works for numeric or categorical columns.",
+    "zero":   "Zero: replace all missing values with 0. Only use when 0 is a meaningful value (e.g., no sales = 0).",
+}
+
+def _tip(key):
+    return _TIPS.get(key, "")
+
+
+def _preview_actions(df, actions):
+    """
+    Simulate all checked actions on a copy of df.
+    Returns (preview_df, list_of_change_summaries).
+    """
+    import numpy as _np
+    preview = df.copy()
+    summaries = []
+
+    if actions.get("drop_empty"):
+        empty = [c for c in preview.columns if preview[c].isna().all()]
+        if empty:
+            preview, _ = drop_empty_columns(preview)
+            label = ", ".join(empty[:4]) + ("..." if len(empty) > 4 else "")
+            summaries.append(f"Drop {len(empty)} fully-empty column(s): {label}")
+        else:
+            summaries.append("Drop empty columns -- none found, no change")
+
+    if actions.get("drop_high_missing"):
+        thresh = actions["drop_hm_thresh"]
+        pcts = preview.isna().mean() * 100
+        cols = pcts[pcts >= thresh].index.tolist()
+        if cols:
+            preview, _ = drop_high_missing_cols(preview, float(thresh))
+            label = ", ".join(cols[:4]) + ("..." if len(cols) > 4 else "")
+            summaries.append(f"Drop >={thresh}% missing: {len(cols)} column(s) -- {label}")
+        else:
+            summaries.append(f"Drop >={thresh}% missing -- no columns qualify, no change")
+
+    if actions.get("remove_dupes"):
+        n_dup = int(preview.duplicated().sum())
+        if n_dup:
+            preview, _ = drop_duplicates(preview, keep="first")
+            summaries.append(f"Remove duplicates -- {n_dup} row(s) removed, {len(preview):,} rows remain")
+        else:
+            summaries.append("Remove duplicates -- none found, no change")
+
+    if actions.get("fill_missing"):
+        strat = actions["fill_strat"]
+        if strat != "Leave as NaN":
+            cols_sel = actions.get("fill_cols") or preview.select_dtypes(include=_np.number).columns.tolist()
+            total_miss_before = int(preview[cols_sel].isna().sum().sum()) if cols_sel else 0
+            if total_miss_before:
+                preview, _ = fill_missing(preview, strat, cols_sel)
+                total_miss_after = int(preview[cols_sel].isna().sum().sum()) if cols_sel else 0
+                filled = total_miss_before - total_miss_after
+                per_col = [(c, int(df[c].isna().sum())) for c in cols_sel if c in df.columns and df[c].isna().any()][:4]
+                per_col_str = "  |  ".join(f"{c}: {n}" for c, n in per_col)
+                summaries.append(f"Fill missing ({strat}) -- {filled} value(s) filled across {len(cols_sel)} col(s)\n   {per_col_str}")
+            else:
+                summaries.append(f"Fill missing ({strat}) -- no missing values in selected columns")
+
+    if actions.get("handle_outliers"):
+        method = actions["out_method"]
+        out_action = actions["out_action"]
+        outliers = detect_outliers(preview, method=method)
+        total_out = sum(v["n_outliers"] for v in outliers.values())
+        if outliers:
+            preview, _ = handle_outliers(preview, list(outliers.keys()), out_action, method=method)
+            cols_str = ", ".join(list(outliers.keys())[:4]) + ("..." if len(outliers) > 4 else "")
+            summaries.append(f"Outliers ({method.upper()}) -> {out_action} -- {total_out:,} outlier(s) in {len(outliers)} col(s): {cols_str}")
+        else:
+            summaries.append(f"Outliers ({method.upper()}) -- none detected, no change")
+
+    if actions.get("std_names"):
+        orig_cols = set(preview.columns)
+        preview, _ = standardise_column_names(preview)
+        renamed = {o: n for o, n in zip(df.columns, preview.columns) if o != n}
+        if renamed:
+            items = list(renamed.items())[:3]
+            summaries.append("Standardise names -- " + str(len(renamed)) + " renamed: " +
+                             ", ".join(f'"{o}"->"{n}"' for o, n in items) +
+                             ("..." if len(renamed) > 3 else ""))
+        else:
+            summaries.append("Standardise names -- no financial aliases matched")
+
+    return preview, summaries
+
+
+def _collect_actions(key_prefix, df):
+    """Read all checkbox/widget states for this file, return an actions dict."""
+    return {
+        "drop_empty":       get_state(f"{key_prefix}_cb_empty")    or False,
+        "drop_high_missing":get_state(f"{key_prefix}_cb_hm")       or False,
+        "drop_hm_thresh":   get_state(f"{key_prefix}_hm_thresh")   or 70,
+        "remove_dupes":     get_state(f"{key_prefix}_cb_dupes")    or False,
+        "fill_missing":     get_state(f"{key_prefix}_cb_fill")     or False,
+        "fill_strat":       get_state(f"{key_prefix}_fill_strat")  or "median",
+        "fill_cols":        get_state(f"{key_prefix}_fill_cols")   or [],
+        "handle_outliers":  get_state(f"{key_prefix}_cb_out")      or False,
+        "out_method":       get_state(f"{key_prefix}_out_method")  or "iqr",
+        "out_action":       get_state(f"{key_prefix}_out_action")  or "flag",
+        "std_names":        get_state(f"{key_prefix}_cb_std")      or False,
+    }
+
+
+def render_expert_upload():
+    """Expert Step 20: one-file-at-a-time with checkboxes + Apply + before/after."""
+    step_header("E·1", "PER-FILE CLEANING",
+                "Select and apply cleaning actions to each file individually")
+
+    entries = get_state("_expert_entries")
+    if not entries:
+        info_box("No files loaded. Go back to Import.", "warn")
+        if st.button("Back to Import"):
+            set_state("step", 1); st.rerun()
+        return
+
+    import numpy as _np
+
+    n_files    = len(entries)
+    cur_i      = get_state("_expert_cur_file") or 0
+    cur_i      = max(0, min(cur_i, n_files - 1))
+    entry      = entries[cur_i]
+    df         = entry["df"]
+    key_prefix = f"ef_{cur_i}"
+    done_count = sum(1 for e in entries if e["log"])
+
+    # ── File header bar ───────────────────────────────────────────────────────
+    dots_html = "".join(
+        f'<span title="{entries[j]["name"]}" style="cursor:default;'
+        f'font-size:{"18" if j==cur_i else "12"}px;'
+        f'color:{"#4db8ff" if j==cur_i else "#00c8a8" if entries[j]["log"] else "#1a3347"}">'
+        f'{"&#9670;" if j==cur_i else "&#9679;" if entries[j]["log"] else "&#9675;"}</span>'
+        for j in range(n_files)
+    )
+    st.markdown(
+        f'<div style="background:linear-gradient(135deg,#0a1f2e,#071420);border:1px solid #1a3347;'
+        f'border-radius:8px;padding:14px 20px;margin-bottom:16px;display:flex;align-items:center;gap:16px;flex-wrap:wrap">'
+        f'<div style="flex:1">'
+        f'<div style="font-family:IBM Plex Mono;font-size:10px;color:#4db8ff;letter-spacing:.12em;margin-bottom:3px">EXPERT MODE</div>'
+        f'<div style="font-family:IBM Plex Mono;font-size:16px;font-weight:700;color:#e8f4fb">'
+        f'File {cur_i+1} / {n_files} &ndash; <span style="color:#4db8ff">{entry["name"]}</span></div>'
+        f'<div style="font-size:11px;color:#4a7088;margin-top:2px">'
+        f'{entry["rows"]:,} rows &middot; {entry["cols"]} cols &middot; {done_count}/{n_files} files cleaned</div>'
+        f'</div>'
+        f'<div style="display:flex;gap:5px;align-items:center">{dots_html}</div>'
+        f'</div>',
+        unsafe_allow_html=True)
+
+    # ── Tabs ──────────────────────────────────────────────────────────────────
+    tab_clean, tab_preview, tab_stats = st.tabs(["🧹 Clean", "👁 Preview", "📊 Stats"])
+
+    with tab_preview:
+        st.dataframe(df.head(12), use_container_width=True, height=220)
+
+    with tab_stats:
+        miss_total = int(df.isna().sum().sum())
+        n_dup_stat = int(df.duplicated().sum())
+        s1, s2, s3, s4 = st.columns(4)
+        with s1: metric_tile("ROWS",       f"{len(df):,}")
+        with s2: metric_tile("COLS",       str(len(df.columns)))
+        with s3: metric_tile("MISSING",    f"{miss_total:,}",    "#ff6060" if miss_total else "#00c8a8")
+        with s4: metric_tile("DUPLICATES", f"{n_dup_stat:,}",    "#ff6060" if n_dup_stat else "#00c8a8")
+
+        miss_cols_stat = sorted(
+            [(c, round(df[c].isna().mean()*100, 1)) for c in df.columns if df[c].isna().any()],
+            key=lambda x: -x[1])
+        if miss_cols_stat:
+            st.markdown('<div style="font-size:11px;color:#4a7088;margin:10px 0 6px">Missing values by column (top 10):</div>', unsafe_allow_html=True)
+            for col, pct in miss_cols_stat[:10]:
+                bar_c = "#ff6060" if pct > 30 else "#f0a020" if pct > 5 else "#4db8ff"
+                st.markdown(
+                    f'<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">'
+                    f'<div style="font-size:11px;color:#c9d8e3;min-width:160px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="{col}">{col}</div>'
+                    f'<div style="flex:1;background:#0d1e2c;height:8px;border-radius:2px">'
+                    f'<div style="width:{pct}%;background:{bar_c};height:100%;border-radius:2px"></div></div>'
+                    f'<div style="font-size:11px;color:{bar_c};min-width:42px;text-align:right">{pct}%</div></div>',
+                    unsafe_allow_html=True)
+
+    with tab_clean:
+
+        # ── Section header ────────────────────────────────────────────────────
+        st.markdown(
+            '<div style="font-family:IBM Plex Mono;font-size:10px;color:#2a4a5e;'
+            'letter-spacing:.12em;margin-bottom:12px">SELECT CLEANING ACTIONS</div>',
+            unsafe_allow_html=True)
+
+        n_dup   = int(df.duplicated().sum())
+        n_empty = sum(1 for c in df.columns if df[c].isna().all())
+        n_miss  = int(df.isna().sum().sum())
+        num_c   = df.select_dtypes(include="number").columns.tolist()
+
+        # ── 1. Drop empty columns ─────────────────────────────────────────────
+        cb_empty = st.checkbox(
+            f"Drop fully-empty columns" + (f" ({n_empty} detected)" if n_empty else " (none detected)"),
+            key=f"{key_prefix}_cb_empty",
+            disabled=(n_empty == 0),
+            help="Removes columns where every single value is missing (NaN). Safe to always apply.")
+
+        # ── 2. Drop high-missing columns ──────────────────────────────────────
+        cb_hm = st.checkbox(
+            "Drop columns above missing threshold",
+            key=f"{key_prefix}_cb_hm",
+            help="Drops any column where the percentage of missing values exceeds the threshold you set.")
+        if cb_hm:
+            hm_thresh = st.slider("Drop columns with more than X% missing",
+                                   10, 100, 70, key=f"{key_prefix}_hm_thresh",
+                                   help="Columns at or above this missing % will be dropped.")
+            pcts_hm = df.isna().mean() * 100
+            would_drop_hm = pcts_hm[pcts_hm >= hm_thresh].index.tolist()
+            label_hm = ", ".join(would_drop_hm[:4]) + ("..." if len(would_drop_hm) > 4 else "")
+            if would_drop_hm:
+                st.caption(f"  Would drop {len(would_drop_hm)} column(s): {label_hm}")
+            else:
+                st.caption(f"  No columns exceed {hm_thresh}% missing.")
+
+        # ── 3. Remove duplicates ──────────────────────────────────────────────
+        cb_dupes = st.checkbox(
+            f"Remove duplicate rows" + (f" ({n_dup:,} detected)" if n_dup else " (none detected)"),
+            key=f"{key_prefix}_cb_dupes",
+            disabled=(n_dup == 0),
+            help="Keeps the first occurrence of each duplicate row and removes the rest.")
+
+        # ── 4. Fill missing values ────────────────────────────────────────────
+        cb_fill = st.checkbox(
+            f"Fill missing values" + (f" ({n_miss:,} total)" if n_miss else " (none)"),
+            key=f"{key_prefix}_cb_fill",
+            disabled=(n_miss == 0 or not num_c),
+            help="Replace NaN values in numeric columns using the chosen strategy.")
+        if cb_fill:
+            fc1, fc2 = st.columns(2)
+            with fc1:
+                strat_labels = {
+                    "mean":         "Mean -- arithmetic average",
+                    "median":       "Median -- middle value (robust to outliers)",
+                    "mode":         "Mode -- most frequent value",
+                    "zero":         "Zero -- fill with 0",
+                    "Leave as NaN": "Leave as NaN (no fill)",
+                }
+                fill_strat = st.selectbox(
+                    "Strategy",
+                    list(strat_labels.keys()),
+                    key=f"{key_prefix}_fill_strat",
+                    format_func=strat_labels.get)
+            with fc2:
+                fill_cols_sel = st.multiselect(
+                    "Columns (blank = all numeric)",
+                    num_c, key=f"{key_prefix}_fill_cols",
+                    help="Leave blank to apply to all numeric columns, or pick specific ones.")
+            if fill_strat in _TIPS:
+                st.markdown(
+                    f'<div style="font-size:11px;color:#4a7088;padding:4px 0 2px">'
+                    f'<strong style="color:#7ab8d4">Tip:</strong> {_tip(fill_strat)}</div>',
+                    unsafe_allow_html=True)
+
+        # ── 5. Outlier handling ───────────────────────────────────────────────
+        cb_out = st.checkbox(
+            "Detect and handle outliers",
+            key=f"{key_prefix}_cb_out",
+            disabled=(not num_c),
+            help="Statistically identifies values that are unusually high or low compared to the rest of the column.")
+        if cb_out:
+            oc1, oc2 = st.columns(2)
+            with oc1:
+                out_method = st.radio(
+                    "Detection method",
+                    ["iqr", "zscore"], horizontal=True,
+                    format_func=lambda x: "IQR" if x == "iqr" else "Z-Score",
+                    key=f"{key_prefix}_out_method",
+                    help="IQR = quartile-based, Z-Score = mean-based.")
+                st.markdown(
+                    f'<div style="font-size:11px;color:#4a7088;padding:2px 0">'
+                    f'<strong style="color:#7ab8d4">Tip:</strong> {_tip(out_method)}</div>',
+                    unsafe_allow_html=True)
+            with oc2:
+                action_labels = {
+                    "flag": "Flag -- add marker column",
+                    "cap":  "Cap -- clamp to boundary",
+                    "drop": "Drop -- remove outlier rows",
+                }
+                out_action = st.radio(
+                    "Action",
+                    ["flag", "cap", "drop"], horizontal=True,
+                    format_func=action_labels.get,
+                    key=f"{key_prefix}_out_action")
+                st.markdown(
+                    f'<div style="font-size:11px;color:#4a7088;padding:2px 0">'
+                    f'<strong style="color:#7ab8d4">Tip:</strong> {_tip(out_action)}</div>',
+                    unsafe_allow_html=True)
+
+        # ── 6. Standardise column names ───────────────────────────────────────
+        cb_std = st.checkbox(
+            "Standardise financial column names",
+            key=f"{key_prefix}_cb_std",
+            help="Renames common financial aliases to canonical English -- e.g. 'CA'->Revenue, 'dette nette'->Net Debt, 'Ventes'->Revenue.")
+
+        # ─────────────────────────────────────────────────────────────────────
+        actions    = _collect_actions(key_prefix, df)
+        n_checked  = sum([actions["drop_empty"], actions["drop_high_missing"],
+                          actions["remove_dupes"], actions["fill_missing"],
+                          actions["handle_outliers"], actions["std_names"]])
+        any_checked = n_checked > 0
+
+        st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
+        st.markdown("---")
+
+        # ── Before/After Preview panel ────────────────────────────────────────
+        if any_checked:
+            with st.expander("Preview changes before applying", expanded=True):
+                try:
+                    preview_df, summaries = _preview_actions(df, actions)
+
+                    st.markdown(
+                        '<div style="font-family:IBM Plex Mono;font-size:10px;color:#4db8ff;'
+                        'letter-spacing:.12em;margin-bottom:8px">WHAT WILL HAPPEN</div>',
+                        unsafe_allow_html=True)
+                    for s in summaries:
+                        st.markdown(
+                            f'<div style="font-size:12px;padding:5px 0;border-bottom:1px solid #0d1e2c;color:#c9d8e3">'
+                            f'&bull; {s}</div>',
+                            unsafe_allow_html=True)
+
+                    st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
+                    pc1, pc2, pc3, pc4 = st.columns(4)
+                    with pc1: metric_tile("ROWS BEFORE", f"{len(df):,}")
+                    with pc2: metric_tile("ROWS AFTER",  f"{len(preview_df):,}",
+                                           "#00c8a8" if len(preview_df) <= len(df) else "#ff6060")
+                    with pc3: metric_tile("COLS BEFORE", str(len(df.columns)))
+                    with pc4: metric_tile("COLS AFTER",  str(len(preview_df.columns)),
+                                           "#00c8a8" if len(preview_df.columns) <= len(df.columns) else "#ff6060")
+
+                    st.markdown('<div style="font-size:11px;color:#4a7088;margin:8px 0 4px">First 5 rows after cleaning:</div>', unsafe_allow_html=True)
+                    st.dataframe(preview_df.head(5), use_container_width=True, height=160)
+
+                except Exception as prev_err:
+                    st.warning(f"Preview unavailable: {prev_err}")
+
+        # ── Action buttons ────────────────────────────────────────────────────
+        btn1, btn2, btn3 = st.columns([3, 3, 3])
+
+        # ── Apply button row ──────────────────────────────────────────────────
+        apply_label = (
+            f"✅  Apply {n_checked} selected action(s) to this file"
+            if any_checked else "No actions selected — tick a checkbox above"
+        )
+        if st.button(apply_label,
+                     type="primary" if any_checked else "secondary",
+                     disabled=not any_checked,
+                     key=f"{key_prefix}_apply"):
+            new_df  = df.copy()
+            new_log = list(entry["log"])   # preserve previous ops on this file
+
+            if actions["drop_empty"]:
+                empty = [c for c in new_df.columns if new_df[c].isna().all()]
+                if empty:
+                    new_df, log_e = drop_empty_columns(new_df)
+                    new_log.append(log_e)
+
+            if actions["drop_high_missing"]:
+                new_df, log_e = drop_high_missing_cols(new_df, float(actions["drop_hm_thresh"]))
+                new_log.append(log_e)
+
+            if actions["remove_dupes"]:
+                if int(new_df.duplicated().sum()):
+                    new_df, log_e = drop_duplicates(new_df, keep="first")
+                    new_log.append(log_e)
+
+            if actions["fill_missing"] and actions["fill_strat"] != "Leave as NaN":
+                cols_to_fill = actions["fill_cols"] or new_df.select_dtypes(include=_np.number).columns.tolist()
+                if cols_to_fill:
+                    new_df, log_e = fill_missing(new_df, actions["fill_strat"], cols_to_fill)
+                    new_log.append(log_e)
+
+            if actions["handle_outliers"]:
+                outliers_found = detect_outliers(new_df, method=actions["out_method"])
+                if outliers_found:
+                    new_df, log_e = handle_outliers(
+                        new_df, list(outliers_found.keys()),
+                        actions["out_action"], method=actions["out_method"])
+                    new_log.append(log_e)
+
+            if actions["std_names"]:
+                new_df, log_e = standardise_column_names(new_df)
+                new_log.append(log_e)
+
+            entries[cur_i]["df"]   = new_df
+            entries[cur_i]["rows"] = len(new_df)
+            entries[cur_i]["cols"] = len(new_df.columns)
+            entries[cur_i]["log"]  = new_log
+            set_state("_expert_entries", entries)
+            # Stay on same file — user navigates manually
+            st.rerun()
+
+        # ── Summary card — always shown when ops exist for this file ──────────
+        if entry["log"]:
+            ops = entry["log"]
+            st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
+            rows_html = ""
+            for op in ops:
+                dr = f" <span style='color:#ff6060'>−{op['rows_delta']} rows</span>" if op["rows_delta"] else ""
+                dc = f" <span style='color:#f0a020'>−{op['cols_delta']} cols</span>" if op["cols_delta"] else ""
+                raw_row = entry["raw_df"]
+                raw_miss = int(raw_row.isna().sum().sum()) if "raw_df" in entry else 0
+                rows_html += (
+                    f'<div style="font-size:12px;padding:5px 0;border-bottom:1px solid #0d2215;color:#c9d8e3">'
+                    f'<span style="font-family:IBM Plex Mono;color:#00c8a8;font-size:10px">#{ops.index(op)+1}</span>  '
+                    f'<strong style="color:#e8f4fb">{op["title"]}</strong>  '
+                    f'<span style="color:#4a7088">{op["detail"][:75]}</span>{dr}{dc}</div>'
+                )
+            # Compute cumulative before/after
+            raw_df = entry.get("raw_df", df)
+            cum_rows_removed = len(raw_df) - len(entry["df"])
+            cum_cols_removed = len(raw_df.columns) - len(entry["df"].columns)
+            cum_miss_filled  = int(raw_df.isna().sum().sum()) - int(entry["df"].isna().sum().sum())
+            st.markdown(
+                f'<div style="background:rgba(0,200,168,.06);border:1px solid rgba(0,200,168,.3);'
+                f'border-radius:6px;padding:14px 18px;margin-top:2px">'
+                f'<div style="font-family:IBM Plex Mono;font-size:10px;color:#00c8a8;'
+                f'letter-spacing:.12em;margin-bottom:10px">'
+                f'✓ FILE {cur_i+1} CLEANED — {len(ops)} OPERATION(S)</div>'
+                f'<div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:10px">'
+                + (f'<span style="font-size:11px"><span style="color:#4a7088">Rows removed </span><span style="color:#ff6060;font-family:IBM Plex Mono">{cum_rows_removed:+d}</span></span>' if cum_rows_removed else "")
+                + (f'<span style="font-size:11px"><span style="color:#4a7088">Cols removed </span><span style="color:#f0a020;font-family:IBM Plex Mono">{cum_cols_removed:+d}</span></span>' if cum_cols_removed else "")
+                + (f'<span style="font-size:11px"><span style="color:#4a7088">Missing filled </span><span style="color:#00c8a8;font-family:IBM Plex Mono">{cum_miss_filled:+d}</span></span>' if cum_miss_filled else "")
+                + f'</div>{rows_html}'
+                + '<div style="font-size:11px;color:#4a7088;margin-top:8px">'
+                  'You can apply more actions above, or navigate to the next file.</div>'
+                + '</div>',
+                unsafe_allow_html=True)
+
+        # ── Revert button (only when ops exist) ──────────────────────────────
+        if entry["log"]:
+            if st.button("↺  Revert — undo all changes to this file",
+                          key=f"{key_prefix}_revert"):
+                raw = entry.get("raw_df")
+                if raw is not None:
+                    entries[cur_i]["df"]   = raw.copy()
+                    entries[cur_i]["rows"] = len(raw)
+                    entries[cur_i]["cols"] = len(raw.columns)
+                    entries[cur_i]["log"]  = []
+                    set_state("_expert_entries", entries)
+                    st.rerun()
+
+        # ── File navigation row ───────────────────────────────────────────────
+        st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
+        nav1, nav2, nav3 = st.columns([3, 4, 3])
+        with nav1:
+            if cur_i > 0:
+                if st.button(f"← File {cur_i} / {n_files}", key=f"{key_prefix}_prev"):
+                    set_state("_expert_cur_file", cur_i - 1); st.rerun()
+        with nav2:
+            if st.button("← Back to Import", key=f"{key_prefix}_back"):
+                set_state("step", 1); st.rerun()
+        with nav3:
+            if cur_i + 1 < n_files:
+                if st.button(f"File {cur_i+2} / {n_files} →", key=f"{key_prefix}_next",
+                             type="primary"):
+                    set_state("_expert_cur_file", cur_i + 1); st.rerun()
+
+        # ── Proceed to merge (always visible once on last file or all cleaned) ─
+        n_cleaned = sum(1 for e in entries if e["log"])
+        ready_msg = (f"<strong>{n_cleaned}/{n_files} files cleaned.</strong> "
+                     + ("All files ready — proceed when you are." if n_cleaned == n_files
+                        else "Uncleaned files will be merged as-is."))
+        st.markdown("---")
+        info_box(ready_msg, "success" if n_cleaned == n_files else "info")
+        if st.button("→ Column Preview & Merge", type="primary", key="expert_to_merge"):
+            set_state("_expert_highest", 21)
+            set_state("step", 21); st.rerun()
+
+        # ── All files done -- proceed button ──────────────────────────────────
+        # (kept empty — merged into the block above)
+
+        # ── Jump to any file ──────────────────────────────────────────────────
+        with st.expander("📋  All files overview — jump to any file"):
+            for j, e in enumerate(entries):
+                n_ops  = len(e["log"])
+                status = "✅ Cleaned" if e["log"] else ("◆ Current" if j == cur_i else "○ Pending")
+                color  = "#00c8a8" if e["log"] else ("#4db8ff" if j == cur_i else "#4a7088")
+                ja, jb = st.columns([7, 2])
+                with ja:
+                    ops_txt = f" · {n_ops} op(s)" if n_ops else ""
+                    st.markdown(
+                        f'<div style="font-size:12px;color:{color};padding:3px 0">'
+                        f'<span style="font-family:IBM Plex Mono">{j+1:02d}.</span> '
+                        f'<strong>{e["name"]}</strong>'
+                        f'<span style="color:#4a7088;font-size:10px"> {e["rows"]:,} rows · {e["cols"]} cols{ops_txt}</span>  '
+                        f'<span style="font-size:10px;color:{color}">{status}</span></div>',
+                        unsafe_allow_html=True)
+                with jb:
+                    if j != cur_i:
+                        if st.button(f"Go →", key=f"jump_{j}", use_container_width=True):
+                            set_state("_expert_cur_file", j); st.rerun()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# EXPERT MODE — Step 21: Column preview & merge decision
+# ══════════════════════════════════════════════════════════════════════════════
+
+def render_expert_merge():
+    """Expert Step 21 — cross-file column analysis + merge decision."""
+    step_header("E·2", "EXPERT — COLUMN PREVIEW & MERGE",
+                "Review common columns and choose your merge strategy")
+
+    entries = get_state("_expert_entries")
+    if not entries:
+        if st.button("← Back"): set_state("step", 20); st.rerun()
+        return
+
+    selected = [e for e in entries if e["selected"]]
+
+    # ── Column presence table ─────────────────────────────────────────────────
+    st.markdown('<div style="font-family:IBM Plex Mono;font-size:10px;color:#2a4a5e;letter-spacing:.12em;margin-bottom:10px">COLUMN PRESENCE ACROSS FILES</div>', unsafe_allow_html=True)
+
+    all_col_counts = _all_columns(selected)
+    n_files = len(selected)
+    # Sort: universal columns first, then partial
+    universal = sorted([c for c, cnt in all_col_counts.items() if cnt == n_files])
+    partial   = sorted([c for c, cnt in all_col_counts.items() if cnt < n_files])
+
+    # Build presence table
+    rows = []
+    for col in universal + partial:
+        row = {"Column": col, "In all files": "✅" if col in universal else ""}
+        for e in selected:
+            row[e["name"][:18]] = "✓" if col in e["df"].columns else "—"
+        rows.append(row)
+
+    if rows:
+        st.dataframe(pd.DataFrame(rows), use_container_width=True, height=min(400, 40 + len(rows)*35))
+
+    info_box(
+        f"<strong>{len(universal)} universal column(s)</strong> present in all {n_files} files — "
+        f"good candidates for join keys. "
+        f"<strong>{len(partial)} partial column(s)</strong> appear in only some files.",
+        "info")
+
+    # ── Merge strategy ────────────────────────────────────────────────────────
+    st.markdown("---")
+    st.markdown('<div style="font-family:IBM Plex Mono;font-size:10px;color:#2a4a5e;letter-spacing:.12em;margin-bottom:10px">MERGE STRATEGY</div>', unsafe_allow_html=True)
+
+    merge_mode = st.radio(
+        "merge_strategy",
+        ["concat","join"],
+        format_func=lambda x:
+            "🔹 Vertical Concatenate — stack rows (same structure per file)"
+            if x=="concat" else
+            "🔸 Horizontal Join — combine columns using a common key",
+        label_visibility="collapsed",
+        key="expert_merge_mode")
+
+    concat_axis = 0
+    join_keys   = []
+    join_type   = "left"
+
+    if merge_mode == "concat":
+        concat_axis = 0 if st.radio(
+            "concat_axis",
+            ["Vertical (stack rows)", "Horizontal (stack columns)"],
+            label_visibility="collapsed", key="expert_concat_axis"
+        ) == "Vertical (stack rows)" else 1
+
+    else:  # join
+        join_keys = st.multiselect(
+            "Join key column(s) — must exist in all files",
+            universal,
+            default=universal[:1],
+            key="expert_join_keys")
+        join_type = st.radio("Join type", ["inner","left","right","outer"],
+                              horizontal=True, key="expert_join_type",
+                              label_visibility="collapsed")
+        if not join_keys:
+            info_box("Select at least one join key to continue.", "warn")
+
+    # ── Live preview ──────────────────────────────────────────────────────────
+    ready = (merge_mode == "concat") or (merge_mode == "join" and len(join_keys) >= 1)
+    if ready:
+        try:
+            if merge_mode == "concat":
+                prev = _execute_concat(selected, concat_axis)
+            else:
+                prev = _execute_join(selected, join_keys, join_type, "suffixes")
+            st.markdown("---")
+            st.markdown(
+                f'<div style="font-family:IBM Plex Mono;font-size:10px;color:#2a4a5e;letter-spacing:.1em;margin-bottom:6px">'
+                f'MERGE PREVIEW — {len(prev):,} rows × {len(prev.columns)} cols</div>',
+                unsafe_allow_html=True)
+            st.dataframe(prev.head(8), use_container_width=True, height=180)
+        except Exception as ex:
+            info_box(f"⚠ Preview error: {ex}", "warn")
+
+    # Save merge config for step 22
+    set_state("_expert_merge_config", {
+        "mode": merge_mode, "concat_axis": concat_axis,
+        "join_keys": join_keys, "join_type": join_type,
+    })
+
+    bc1, _, bc2 = st.columns([3, 6, 3])
+    with bc1:
+        if st.button("← Back to File Cleaning"):
+            set_state("step", 20); st.rerun()
+    with bc2:
+        if st.button("→ Apply Merge & Export", type="primary", disabled=not ready):
+            # Execute the real merge
+            try:
+                if merge_mode == "concat":
+                    merged = _execute_concat(selected, concat_axis)
+                else:
+                    merged = _execute_join(selected, join_keys, join_type, "suffixes")
+                merged, renames = deduplicate_columns(merged)
+                set_state("_expert_merged_df", merged)
+                set_state("_expert_merge_renames", renames)
+                set_state("_expert_highest", 22)
+                set_state("step", 22); st.rerun()
+            except Exception as ex:
+                st.error(f"Merge failed: {ex}")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# EXPERT MODE — Step 22: Final merged view + export
+# ══════════════════════════════════════════════════════════════════════════════
+
+def render_expert_export():
+    """Expert Step 22 — final merged result + export options."""
+    step_header("E·3", "EXPERT — FINAL MERGE & EXPORT",
+                "Review the merged result and export your files")
+
+    entries      = get_state("_expert_entries") or []
+    merged_df    = get_state("_expert_merged_df")
+    renames      = get_state("_expert_merge_renames") or []
+    merge_config = get_state("_expert_merge_config") or {}
+
+    if merged_df is None:
+        info_box("No merged data found. Go back to the merge step.", "warn")
+        if st.button("← Back"): set_state("step", 21); st.rerun()
+        return
+
+    if renames:
+        info_box(f"⚠ <strong>{len(renames)} column(s) auto-renamed</strong> during merge to avoid duplicates: "
+                 + ", ".join(renames[:6]) + ("…" if len(renames) > 6 else ""), "warn")
+
+    # ── Merged dataset summary ────────────────────────────────────────────────
+    st.markdown('<div style="font-family:IBM Plex Mono;font-size:10px;color:#2a4a5e;letter-spacing:.12em;margin-bottom:10px">MERGED DATASET</div>', unsafe_allow_html=True)
+    m1, m2, m3, m4 = st.columns(4)
+    with m1: metric_tile("ROWS",          f"{len(merged_df):,}")
+    with m2: metric_tile("COLS",          str(len(merged_df.columns)))
+    with m3: metric_tile("MISSING",       f"{int(merged_df.isna().sum().sum()):,}",
+                          "#ff6060" if merged_df.isna().any().any() else "#00c8a8")
+    with m4: metric_tile("FILES MERGED",  str(len(entries)))
+
+    st.dataframe(merged_df.head(10), use_container_width=True, height=220)
+
+    # ── Export options ────────────────────────────────────────────────────────
+    st.markdown("---")
+    st.markdown('<div style="font-family:IBM Plex Mono;font-size:10px;color:#2a4a5e;letter-spacing:.12em;margin-bottom:12px">EXPORT</div>', unsafe_allow_html=True)
+
+    ex1, ex2, ex3 = st.columns(3)
+
+    with ex1:
+        st.markdown('<div class="dp-card">', unsafe_allow_html=True)
+        st.markdown("**📄 Merged file**")
+        st.caption("The combined and merged dataset.")
+        csv_merged = to_csv_bytes(merged_df)
+        st.download_button("⬇ Download merged.csv",
+                            data=csv_merged,
+                            file_name="expert_merged.csv",
+                            mime="text/csv",
+                            width="stretch")
+        st.markdown(f'<div style="font-size:11px;color:#2a4a5e;margin-top:6px">{len(merged_df):,} rows · {len(merged_df.columns)} cols · {len(csv_merged)/1024:.1f} KB</div>', unsafe_allow_html=True)
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    with ex2:
+        st.markdown('<div class="dp-card">', unsafe_allow_html=True)
+        st.markdown("**📂 Individual cleaned files**")
+        st.caption("Each file as cleaned in Step 1.")
+        for e in entries:
+            csv_e = to_csv_bytes(e["df"])
+            clean_name = e["name"].rsplit(".",1)[0] + "_cleaned.csv"
+            st.download_button(
+                f"⬇ {e['name'][:28]}",
+                data=csv_e,
+                file_name=clean_name,
+                mime="text/csv",
+                key=f"dl_expert_{e['name']}",
+                width="stretch")
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    with ex3:
+        st.markdown('<div class="dp-card">', unsafe_allow_html=True)
+        st.markdown("**📋 Cleaning log**")
+        st.caption("All operations applied per file.")
+        all_logs = []
+        for e in entries:
+            for op in e["log"]:
+                all_logs.append({**op, "file": e["name"]})
+        if all_logs:
+            log_json = json.dumps(all_logs, indent=2, default=str)
+            st.download_button("⬇ Download expert_log.json",
+                                data=log_json.encode("utf-8"),
+                                file_name="expert_log.json",
+                                mime="application/json",
+                                width="stretch")
+            st.caption(f"{len(all_logs)} total operation(s) across {len(entries)} file(s)")
+        else:
+            st.caption("No cleaning operations were applied.")
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    st.markdown("---")
+    bc1, _, bc2 = st.columns([3, 6, 3])
+    with bc1:
+        if st.button("← Back to Merge"):
+            set_state("step", 21); st.rerun()
+    with bc2:
+        if st.button("⟳ Start Over", type="primary"):
+            for key in ["_expert_entries","_expert_merged_df","_expert_merge_renames",
+                        "_expert_merge_config","_expert_highest","step"]:
+                if key in st.session_state:
+                    del st.session_state[key]
+            st.rerun()
 
 # ══════════════════════════════════════════════════════════════════════════════
 # MAIN
@@ -1830,7 +2837,6 @@ def main():
     if   step == 1:  render_import()
     elif step == 2: render_file_review()
     elif step == 3:
-
         render_merge_settings()
     elif step == 4: render_resolve_dupes()
     elif step == 5:  render_profile()
@@ -1841,6 +2847,10 @@ def main():
     elif step == 10:  render_finance()
     elif step == 11:  render_standardise()
     elif step == 12:  render_report()
+    # ── Expert mode ──────────────────────────────────────────────────────────
+    elif step == 20: render_expert_upload()
+    elif step == 21: render_expert_merge()
+    elif step == 22: render_expert_export()
 
 
 if __name__ == "__main__":
