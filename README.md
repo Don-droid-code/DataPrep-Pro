@@ -48,8 +48,7 @@ Full control over every step:
 - Pandas
 - Claude (AI)
 
-## 📸 Screenshots
-## 📸 Screenshots
+
 
 ### Main Interface
 ![DataPrep Pro Interface 1](DataPrep%20Pro%20Interface%201.png)
