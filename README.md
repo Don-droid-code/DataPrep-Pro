@@ -13,6 +13,34 @@ Automatically clean raw financial files (CSV, Excel) and prepare them for analys
 - Auto-clean with quality score (35 → 77)
 - Full navigation between steps
 
+- ## 🧠 Two Modes for Different Users
+
+### ⚡ Quick Clean (default)
+Merge first, then clean globally.  
+Ideal for beginners or when you need a fast result.
+
+### 🎯 Expert Mode (NEW)
+Clean each file individually, then decide how to merge.  
+Full control over every step:
+- File‑by‑file cleaning with multiple actions at once
+- All cleaning steps visible (duplicates, missing values, outliers, standardization, etc.)
+- Actionable suggestions (Apply / Review / Ignore)
+- Tooltips & explanations for every option
+- Before/after preview for each action
+- Step summary after each file
+- Manual file navigation (you choose when to move to the next file)
+
+👉 Perfect for professionals who need transparency and control.
+
+![Expert Mode Interface](expert-mode-interface.png)
+*Choose between Quick Clean and Expert Mode*
+
+![Multi‑action cleaning](multi-action-cleaning.png)
+*Apply multiple actions at once on a single file*
+
+![Actionable suggestions](actionable-suggestions.png)
+*Suggestions with Apply / Review / Ignore buttons*
+
 ## 🛠️ Tech Stack
 -![Streamlit](https://img.shields.io/badge/Streamlit-1.28-FF4B4B?style=flat&logo=streamlit&logoColor=white)
 ![Python](https://img.shields.io/badge/Python-3.9-blue?style=flat&logo=python&logoColor=white)
