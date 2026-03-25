@@ -64,6 +64,8 @@ Full control over every step:
 
 Feel free to reach out for questions, collaboration, or opportunities!
 
+“Archived – merged into AnalytiQ-Pro”.
+
 ## 🚀 Installation
 ```bash
 git clone https://github.com/your-username/DataPrep-Pro.git
